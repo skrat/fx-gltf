@@ -301,6 +301,12 @@ namespace gltf
             uint32_t chunkType{};
         };
 
+        struct Chunk
+        {
+            ChunkHeader header;
+            std::vector<uint8_t> body{};
+        };
+
         struct GLBHeader
         {
             uint32_t magic{};
@@ -799,6 +805,7 @@ namespace gltf
         int32_t scene{ -1 };
         std::vector<std::string> extensionsUsed{};
         std::vector<std::string> extensionsRequired{};
+        std::vector<detail::Chunk> extraChunks;
 
         nlohmann::json extensionsAndExtras{};
     };
@@ -1599,6 +1606,9 @@ namespace gltf
 
             std::vector<uint8_t> * binaryData{};
             std::size_t binaryOffset{};
+
+            std::vector<uint8_t> * extraChunksData{};
+            std::size_t extraChunksLength{};
         };
 
         inline std::size_t GetFileSize(std::ifstream & file)
@@ -1698,6 +1708,20 @@ namespace gltf
                     std::memcpy(&buffer.data[0], &binary[HeaderEndOffset], buffer.byteLength);
                 }
             }
+            if (dataContext.extraChunksLength != 0)
+            {
+                std::size_t offset = 0;
+                std::vector<uint8_t> & extraChunks = *dataContext.extraChunksData;
+                while (offset != dataContext.extraChunksLength)
+                {
+                    Chunk chunk;
+                    std::memcpy(&chunk.header, &extraChunks[offset], detail::ChunkHeaderSize);
+                    chunk.body.resize(chunk.header.chunkLength);
+                    std::memcpy(&chunk.body[0], &extraChunks[offset + detail::ChunkHeaderSize], chunk.header.chunkLength);
+                    document.extraChunks.push_back(chunk);
+                    offset += detail::ChunkHeaderSize + chunk.header.chunkLength;
+                }
+            }
 
             return document;
         }
@@ -1776,6 +1800,12 @@ namespace gltf
                 os.write(&nulls[0], binPadding);
 
                 externalBufferIndex = 1;
+
+                for(auto & chunk : document.extraChunks)
+                {
+                    os.write(reinterpret_cast<char const *>(&chunk.header), detail::ChunkHeaderSize);
+                    os.write(reinterpret_cast<char const *>(&chunk.body[0]), chunk.header.chunkLength);
+                }
             }
             else
             {
@@ -1860,8 +1890,11 @@ namespace gltf
     {
         try
         {
-            std::vector<uint8_t> binary(detail::HeaderSize);
             detail::GLBHeader header;
+            std::size_t totalSize = 0;
+            std::vector<uint8_t> binary(detail::HeaderSize);
+            std::vector<uint8_t> extraChunks;
+            std::size_t extraChunksLength = 0;
             {
                 if (!is.good())
                 {
@@ -1879,7 +1912,7 @@ namespace gltf
                 {
                     throw invalid_gltf_document("Invalid GLB header");
                 }
-                std::size_t totalSize = detail::HeaderSize + header.jsonHeader.chunkLength;
+                totalSize += detail::HeaderSize + header.jsonHeader.chunkLength;
                 if (totalSize > readQuotas.MaxFileSize)
                 {
                     throw invalid_gltf_document("Quota exceeded : file size > MaxFileSize");
@@ -1913,11 +1946,37 @@ namespace gltf
                         throw std::system_error(std::make_error_code(std::errc::io_error));
                     }
                 }
+                while (!is.eof())
+                {
+                    detail::ChunkHeader head;
+                    is.read(reinterpret_cast<char *>(&head), detail::ChunkHeaderSize);
+                    if (!is.eof())
+                    {
+                        if (!is.good())
+                        {
+                            throw std::system_error(std::make_error_code(std::errc::io_error));
+                        }
+                        totalSize += detail::ChunkHeaderSize + head.chunkLength;
+                        if (totalSize > readQuotas.MaxFileSize)
+                        {
+                            throw invalid_gltf_document("Quota exceeded : file size > MaxFileSize");
+                        }
+                        extraChunks.resize(extraChunksLength + detail::ChunkHeaderSize + head.chunkLength);
+                        memcpy(&extraChunks[extraChunksLength], &head, detail::ChunkHeaderSize);
+                        is.read(reinterpret_cast<char *>(&extraChunks[extraChunksLength + detail::ChunkHeaderSize]), head.chunkLength);
+                        if (!is.good())
+                        {
+                            throw std::system_error(std::make_error_code(std::errc::io_error));
+                        }
+                        extraChunksLength += detail::ChunkHeaderSize + head.chunkLength;
+                    }
+                }
             }
 
             return detail::Create(
                 nlohmann::json::parse({ &binary[detail::HeaderSize], header.jsonHeader.chunkLength }),
-                { bufferRootPath, readQuotas, &binary, detail::HeaderSize + header.jsonHeader.chunkLength });
+                { bufferRootPath, readQuotas, &binary, detail::HeaderSize + header.jsonHeader.chunkLength,
+                  &extraChunks, extraChunksLength });
         }
         catch (invalid_gltf_document &)
         {

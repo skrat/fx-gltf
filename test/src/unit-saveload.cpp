@@ -160,5 +160,24 @@ TEST_CASE("saveload")
         REQUIRE(newDocument.buffers.back().IsEmbeddedResource());
     }
 
+    SECTION("load binary with extra chunks - save binary with extra chunks")
+    {
+        std::string originalFile{ "data/extra_chunks.glb" };
+        fx::gltf::Document originalDocument = fx::gltf::LoadFromBinary(originalFile);
+
+        REQUIRE(originalDocument.extraChunks.size() == 1);
+        REQUIRE(originalDocument.extraChunks.at(0).header.chunkType == 0x45474445);
+
+        std::string newFile{ utility::GetTestOutputDir() + "/test9.glb" };
+        fx::gltf::Save(originalDocument, newFile, true);
+        fx::gltf::Document newDocument = fx::gltf::LoadFromBinary(newFile);
+
+        REQUIRE(newDocument.extraChunks.size() == 1);
+        REQUIRE(newDocument.extraChunks.at(0).header.chunkType ==
+                originalDocument.extraChunks.at(0).header.chunkType);
+        REQUIRE(newDocument.extraChunks.at(0).header.chunkLength ==
+                originalDocument.extraChunks.at(0).header.chunkLength);
+    }
+
     utility::CleanupTestOutputDir();
 }
