@@ -1782,7 +1782,16 @@ namespace gltf
 
                 header.jsonHeader.chunkLength = ((jsonText.length() + 3) & (~3u));
                 const uint32_t headerPadding = static_cast<uint32_t>(header.jsonHeader.chunkLength - jsonText.length());
-                header.length = detail::HeaderSize + header.jsonHeader.chunkLength + detail::ChunkHeaderSize + binHeader.chunkLength;
+                header.length =
+                    detail::HeaderSize +
+                    header.jsonHeader.chunkLength +
+                    detail::ChunkHeaderSize +
+                    binHeader.chunkLength +
+                    std::accumulate
+                    (document.extraChunks.begin(),
+                     document.extraChunks.end(), 0,
+                     [&](std::size_t n, detail::Chunk const & chunk)
+                     { return n + detail::ChunkHeaderSize + chunk.header.chunkLength; });
 
                 if (!os.good())
                 {
